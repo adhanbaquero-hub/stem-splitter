@@ -1,0 +1,1360 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="StemSplit">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="description" content="Separa cualquier canción en drums, bass, vocals y other con IA">
+
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+
+<title>Stem Splitter</title>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
+
+:root {
+  --ink:    #0a0a0f;
+  --paper:  #0f0f1a;
+  --panel:  #141420;
+  --raised: #1a1a28;
+  --border: #1f1f32;
+  --muted:  #38385a;
+  --dim:    #64648a;
+  --text:   #b8b8d8;
+  --bright: #e8e8f8;
+
+  --drums:  #ff6b35;
+  --bass:   #a855f7;
+  --vocals: #06d6a0;
+  --other:  #fbbf24;
+
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+
+  --r: 14px;
+  --r-sm: 8px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; -webkit-tap-highlight-color: transparent; }
+
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  min-height: 100%;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+  overscroll-behavior-y: contain;
+}
+
+/* Subtle noise texture */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none; z-index: 9999;
+  opacity: .4;
+}
+
+/* ── Top bar ── */
+.topbar {
+  position: sticky; top: 0; z-index: 100;
+  padding: 14px 20px 12px;
+  background: rgba(10,10,15,.85);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.logo {
+  font-family: 'Space Mono', monospace;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: .1em;
+  color: var(--bright);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.logo-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--vocals);
+  box-shadow: 0 0 10px var(--vocals);
+  animation: pulse-dot 2.8s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; box-shadow: 0 0 10px var(--vocals); }
+  50%       { opacity: .5; box-shadow: 0 0 4px var(--vocals); }
+}
+
+.api-badge {
+  font-size: 10px;
+  font-family: 'Space Mono', monospace;
+  padding: 4px 9px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+  background: var(--panel);
+}
+.api-badge:hover, .api-badge.configured { border-color: var(--vocals); color: var(--vocals); }
+
+/* ── Main scroll area ── */
+.page { padding: 20px 16px 40px; max-width: 640px; margin: 0 auto; }
+
+/* ── API setup card (initially shown if no key) ── */
+.setup-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.setup-card.hidden { display: none; }
+
+.setup-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bright);
+  margin-bottom: 4px;
+}
+
+.setup-desc {
+  font-size: 12px;
+  color: var(--dim);
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+.setup-desc a { color: var(--vocals); text-decoration: none; }
+
+.input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.key-input {
+  flex: 1;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 11px 14px;
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  color: var(--bright);
+  outline: none;
+  transition: border-color .15s;
+  -webkit-appearance: none;
+}
+.key-input::placeholder { color: var(--muted); }
+.key-input:focus { border-color: var(--vocals); }
+
+.btn-save-key {
+  padding: 11px 16px;
+  background: var(--vocals);
+  color: #0a0a0f;
+  border: none;
+  border-radius: var(--r-sm);
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Also allow local server toggle */
+.mode-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.mode-tab {
+  flex: 1;
+  padding: 9px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--dim);
+  cursor: pointer;
+  text-align: center;
+  transition: all .15s;
+}
+.mode-tab.active {
+  border-color: var(--vocals);
+  color: var(--vocals);
+  background: rgba(6,214,160,.06);
+}
+
+/* ── Drop zone ── */
+#drop-zone {
+  border: 1.5px dashed var(--muted);
+  border-radius: var(--r);
+  padding: 40px 24px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--panel);
+  position: relative;
+  overflow: hidden;
+  transition: border-color .2s, background .2s;
+  -webkit-user-select: none; user-select: none;
+}
+
+#drop-zone.drag-over {
+  border-color: var(--vocals);
+  background: rgba(6,214,160,.04);
+}
+
+#drop-zone input[type="file"] {
+  position: absolute; inset: 0;
+  opacity: 0; cursor: pointer;
+  width: 100%; height: 100%;
+  font-size: 16px; /* prevents iOS zoom */
+}
+
+.drop-rings {
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 16px;
+  position: relative;
+}
+.drop-rings::before {
+  content: '';
+  position: absolute; inset: -10px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.05);
+}
+.drop-emoji { font-size: 28px; }
+
+.drop-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--bright);
+  margin-bottom: 6px;
+}
+.drop-sub {
+  font-size: 12px;
+  color: var(--dim);
+  font-family: 'Space Mono', monospace;
+  letter-spacing: .04em;
+}
+
+/* ── File preview ── */
+#file-preview {
+  display: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  margin-top: 12px;
+}
+#file-preview.visible { display: block; }
+
+.fp-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fp-icon { font-size: 22px; flex-shrink: 0; }
+
+.fp-info { flex: 1; min-width: 0; }
+
+.fp-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--bright);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fp-meta {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: 'Space Mono', monospace;
+  margin-top: 2px;
+}
+
+.fp-clear {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  transition: border-color .15s, color .15s;
+}
+.fp-clear:hover { border-color: var(--muted); color: var(--bright); }
+
+#waveform-canvas {
+  width: 100%;
+  height: 64px;
+  display: block;
+  background: var(--ink);
+}
+
+/* ── Separate button ── */
+#btn-separate {
+  display: none;
+  width: 100%;
+  margin-top: 14px;
+  padding: 18px;
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: #0a0a0f;
+  background: var(--vocals);
+  border: none;
+  border-radius: var(--r);
+  cursor: pointer;
+  -webkit-appearance: none;
+  transition: opacity .2s, transform .1s;
+  position: relative;
+  overflow: hidden;
+}
+#btn-separate::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.15), transparent);
+  transform: translateX(-100%);
+}
+#btn-separate:not(:disabled):hover::after { animation: shimmer .6s ease; }
+@keyframes shimmer { to { transform: translateX(100%); } }
+
+#btn-separate.visible { display: flex; align-items: center; justify-content: center; gap: 8px; }
+#btn-separate:disabled { opacity: .4; cursor: not-allowed; }
+#btn-separate:not(:disabled):active { transform: scale(.98); }
+
+/* ── Progress ── */
+#progress-area {
+  display: none;
+  margin-top: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 18px;
+}
+#progress-area.visible { display: block; }
+
+.prog-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.prog-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--bright);
+}
+#prog-pct {
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  color: var(--vocals);
+}
+
+.prog-track {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+#prog-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--vocals), #00ffcc);
+  border-radius: 2px;
+  transition: width .5s ease;
+  width: 0%;
+}
+#prog-fill.indeterminate {
+  width: 35%;
+  animation: slide 1.5s ease-in-out infinite;
+}
+@keyframes slide {
+  0%   { transform: translateX(-200%); }
+  100% { transform: translateX(400%); }
+}
+
+#prog-step {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: 'Space Mono', monospace;
+}
+
+/* ── Error ── */
+#error-msg {
+  display: none;
+  margin-top: 14px;
+  padding: 14px 16px;
+  background: rgba(239,68,68,.08);
+  border: 1px solid rgba(239,68,68,.25);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  color: #f87171;
+  line-height: 1.5;
+}
+#error-msg.visible { display: block; }
+
+/* ── Stems ── */
+#stems-area {
+  display: none;
+  margin-top: 24px;
+}
+#stems-area.visible { display: block; }
+
+.stems-header {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stems-header::after {
+  content: ''; flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.stem-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  margin-bottom: 10px;
+  transition: border-color .2s;
+}
+.stem-card:last-child { margin-bottom: 0; }
+
+.stem-row1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.stem-icon-wrap {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.stem-label { flex: 1; }
+.stem-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bright);
+  line-height: 1.2;
+}
+.stem-desc {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: 'Space Mono', monospace;
+}
+
+.stem-dl-btn {
+  padding: 10px 16px;
+  border-radius: var(--r-sm);
+  border: 1.5px solid;
+  background: transparent;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: background .15s;
+  white-space: nowrap;
+  -webkit-appearance: none;
+}
+.stem-dl-btn:active { opacity: .75; }
+.stem-dl-btn:disabled { opacity: .35; cursor: not-allowed; }
+.stem-dl-btn.done { opacity: .6; }
+
+/* Gain slider row */
+.gain-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gain-label {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: 'Space Mono', monospace;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.gain-slider {
+  flex: 1;
+  -webkit-appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+}
+.gain-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--bright);
+  cursor: pointer;
+  box-shadow: 0 1px 6px rgba(0,0,0,.5);
+  transition: transform .1s;
+}
+.gain-slider::-webkit-slider-thumb:active { transform: scale(1.25); }
+
+.gain-val {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  color: var(--dim);
+  width: 40px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Bottom actions ── */
+#bottom-actions {
+  display: none;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  gap: 10px;
+  flex-direction: column;
+}
+#bottom-actions.visible { display: flex; }
+
+#btn-dl-all {
+  padding: 16px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--bright);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background .15s, border-color .15s;
+  -webkit-appearance: none;
+}
+#btn-dl-all:hover { background: var(--panel); border-color: var(--muted); }
+#btn-dl-all:active { opacity: .8; }
+
+#btn-new {
+  padding: 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  font-size: 13px;
+  color: var(--dim);
+  cursor: pointer;
+  text-align: center;
+  transition: color .15s, border-color .15s;
+  -webkit-appearance: none;
+}
+#btn-new:hover { color: var(--bright); border-color: var(--muted); }
+
+/* ── Install banner ── */
+#install-banner {
+  display: none;
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: rgba(6,214,160,.07);
+  border: 1px solid rgba(6,214,160,.2);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  color: var(--vocals);
+  align-items: center;
+  gap: 12px;
+}
+#install-banner.visible { display: flex; }
+
+#btn-install {
+  margin-left: auto;
+  padding: 8px 14px;
+  background: var(--vocals);
+  color: #0a0a0f;
+  border: none;
+  border-radius: 6px;
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Toast ── */
+#toast {
+  position: fixed;
+  bottom: calc(24px + var(--safe-bottom));
+  left: 50%; transform: translateX(-50%) translateY(80px);
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 30px;
+  padding: 10px 20px;
+  font-size: 13px;
+  color: var(--bright);
+  white-space: nowrap;
+  z-index: 9998;
+  transition: transform .3s cubic-bezier(.34,1.56,.64,1), opacity .3s;
+  opacity: 0;
+  pointer-events: none;
+}
+#toast.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+
+/* ── Footer ── */
+footer {
+  margin-top: 40px;
+  padding: 16px 0 4px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.footer-text {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: 'Space Mono', monospace;
+}
+.mode-indicator {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: 'Space Mono', monospace;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.mode-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.mode-dot.active { background: var(--vocals); box-shadow: 0 0 5px var(--vocals); }
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-dot"></div>
+    STEM SPLITTER
+  </div>
+  <button class="api-badge" id="api-badge-btn" onclick="toggleSetup()">
+    ⚙ Configurar API
+  </button>
+</div>
+
+<div class="page">
+
+  <!-- API / Mode setup -->
+  <div class="setup-card" id="setup-card">
+    <div class="setup-title">Elige cómo procesar el audio</div>
+    <div class="setup-desc">
+      La separación requiere IA en la nube o tu servidor local.<br>
+      <strong>Replicate</strong> es la opción más fácil — crea cuenta gratis en
+      <a href="https://replicate.com" target="_blank">replicate.com</a> y obtén tu token.
+    </div>
+
+    <div class="mode-tabs">
+      <div class="mode-tab active" id="tab-cloud" onclick="setMode('cloud')">☁ Nube (Replicate)</div>
+      <div class="mode-tab" id="tab-local" onclick="setMode('local')">🖥 Servidor local</div>
+    </div>
+
+    <div id="cloud-config">
+      <div class="input-row">
+        <input
+          class="key-input"
+          id="api-key-input"
+          type="password"
+          placeholder="r8_xxxxxxxxxxxxxxxxxxxx"
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck="false"
+        >
+        <button class="btn-save-key" onclick="saveApiKey()">Guardar</button>
+      </div>
+    </div>
+
+    <div id="local-config" style="display:none">
+      <div class="input-row">
+        <input
+          class="key-input"
+          id="local-url-input"
+          type="url"
+          value="http://localhost:5050"
+          placeholder="http://localhost:5050"
+          autocomplete="off"
+        >
+        <button class="btn-save-key" onclick="saveLocalUrl()">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drop zone -->
+  <div id="drop-zone">
+    <input type="file" id="file-input" accept=".mp3,.wav,.flac,.ogg,.m4a,audio/*">
+    <div class="drop-rings">
+      <span class="drop-emoji">🎵</span>
+    </div>
+    <div class="drop-label">Toca para seleccionar audio</div>
+    <div class="drop-sub">MP3 · WAV · FLAC · OGG · M4A</div>
+  </div>
+
+  <!-- File preview -->
+  <div id="file-preview">
+    <div class="fp-header">
+      <span class="fp-icon">🎶</span>
+      <div class="fp-info">
+        <div class="fp-name" id="fp-name">—</div>
+        <div class="fp-meta" id="fp-meta">—</div>
+      </div>
+      <button class="fp-clear" onclick="clearFile()">✕</button>
+    </div>
+    <canvas id="waveform-canvas"></canvas>
+  </div>
+
+  <!-- Install banner -->
+  <div id="install-banner">
+    <span>📲 Instalar como app</span>
+    <button id="btn-install" onclick="installPwa()">Instalar</button>
+  </div>
+
+  <!-- Separate button -->
+  <button id="btn-separate" disabled>
+    <span id="btn-sep-text">⚡ Separar pistas</span>
+  </button>
+
+  <!-- Progress -->
+  <div id="progress-area">
+    <div class="prog-top">
+      <span class="prog-title">Separando con htdemucs…</span>
+      <span id="prog-pct">—</span>
+    </div>
+    <div class="prog-track">
+      <div id="prog-fill" class="indeterminate"></div>
+    </div>
+    <div id="prog-step">Enviando audio a la nube…</div>
+  </div>
+
+  <!-- Error -->
+  <div id="error-msg"></div>
+
+  <!-- Stems -->
+  <div id="stems-area">
+    <div class="stems-header">Pistas separadas</div>
+    <div id="stems-grid"></div>
+  </div>
+
+  <!-- Bottom actions -->
+  <div id="bottom-actions">
+    <button id="btn-dl-all">⬇ Descargar las 4 pistas</button>
+    <button id="btn-new" onclick="resetAll()">↩ Procesar otra canción</button>
+  </div>
+
+  <footer>
+    <span class="footer-text">htdemucs · 4-stem separation</span>
+    <div class="mode-indicator">
+      <div class="mode-dot" id="mode-dot"></div>
+      <span id="mode-label">Sin configurar</span>
+    </div>
+  </footer>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────
+const STEMS = [
+  { id: 'drums',  label: 'Drums',  desc: 'Batería & percusión', icon: '🥁', color: '#ff6b35', bg: 'rgba(255,107,53,.1)' },
+  { id: 'bass',   label: 'Bass',   desc: 'Bajo',                icon: '🎸', color: '#a855f7', bg: 'rgba(168,85,247,.1)' },
+  { id: 'vocals', label: 'Vocals', desc: 'Voces',               icon: '🎤', color: '#06d6a0', bg: 'rgba(6,214,160,.1)' },
+  { id: 'other',  label: 'Other',  desc: 'Instrumentos / mezcla', icon: '🎹', color: '#fbbf24', bg: 'rgba(251,191,36,.1)' },
+];
+
+let state = {
+  mode:      localStorage.getItem('ss_mode')    || 'cloud',
+  apiKey:    localStorage.getItem('ss_apikey')  || '',
+  localUrl:  localStorage.getItem('ss_localurl')|| 'http://localhost:5050',
+  file:      null,
+  jobId:     null,       // Replicate prediction ID or local job ID
+  stemUrls:  {},         // stem → download URL
+  gains:     { drums:0, bass:0, vocals:0, other:0 },
+  audioCtx:  null,
+  audioBuffer: null,
+};
+
+let deferredInstallPrompt = null;
+
+// ── DOM refs ──────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const setupCard    = $('setup-card');
+const apiBadge     = $('api-badge-btn');
+const dropZone     = $('drop-zone');
+const fileInput    = $('file-input');
+const filePreview  = $('file-preview');
+const fpName       = $('fp-name');
+const fpMeta       = $('fp-meta');
+const waveCanvas   = $('waveform-canvas');
+const btnSep       = $('btn-separate');
+const progArea     = $('progress-area');
+const progFill     = $('prog-fill');
+const progPct      = $('prog-pct');
+const progStep     = $('prog-step');
+const errorMsg     = $('error-msg');
+const stemsArea    = $('stems-area');
+const stemsGrid    = $('stems-grid');
+const bottomActs   = $('bottom-actions');
+const installBanner = $('install-banner');
+const modeDot      = $('mode-dot');
+const modeLabel    = $('mode-label');
+
+// ── Init ──────────────────────────────────────────────────────────────
+function init() {
+  setMode(state.mode, false);
+  if (state.apiKey) {
+    $('api-key-input').value = state.apiKey;
+    apiBadge.classList.add('configured');
+    setupCard.classList.add('hidden');
+  }
+  $('local-url-input').value = state.localUrl;
+  updateModeIndicator();
+  registerSW();
+}
+
+function registerSW() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+}
+
+// ── PWA install ───────────────────────────────────────────────────────
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  installBanner.classList.add('visible');
+});
+
+window.addEventListener('appinstalled', () => {
+  installBanner.classList.remove('visible');
+  toast('✓ App instalada correctamente');
+});
+
+function installPwa() {
+  if (!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  deferredInstallPrompt.userChoice.then(() => {
+    deferredInstallPrompt = null;
+    installBanner.classList.remove('visible');
+  });
+}
+
+// ── Setup panel ───────────────────────────────────────────────────────
+function toggleSetup() {
+  setupCard.classList.toggle('hidden');
+}
+
+function setMode(mode, save = true) {
+  state.mode = mode;
+  if (save) localStorage.setItem('ss_mode', mode);
+
+  $('tab-cloud').classList.toggle('active', mode === 'cloud');
+  $('tab-local').classList.toggle('active', mode === 'local');
+  $('cloud-config').style.display = mode === 'cloud' ? 'block' : 'none';
+  $('local-config').style.display = mode === 'local' ? 'block' : 'none';
+  updateModeIndicator();
+}
+
+function saveApiKey() {
+  const key = $('api-key-input').value.trim();
+  if (!key) { toast('⚠ Ingresa tu token de Replicate'); return; }
+  state.apiKey = key;
+  localStorage.setItem('ss_apikey', key);
+  apiBadge.classList.add('configured');
+  setupCard.classList.add('hidden');
+  updateModeIndicator();
+  toast('✓ Token guardado');
+  checkSeparateReady();
+}
+
+function saveLocalUrl() {
+  const url = $('local-url-input').value.trim();
+  state.localUrl = url;
+  localStorage.setItem('ss_localurl', url);
+  setupCard.classList.add('hidden');
+  updateModeIndicator();
+  toast('✓ URL guardada');
+  checkSeparateReady();
+}
+
+function updateModeIndicator() {
+  const ready = state.mode === 'cloud' ? !!state.apiKey : !!state.localUrl;
+  modeDot.classList.toggle('active', ready);
+  modeLabel.textContent = state.mode === 'cloud'
+    ? (state.apiKey ? 'Replicate · listo' : 'Replicate · sin token')
+    : `Local · ${state.localUrl}`;
+  apiBadge.textContent = state.mode === 'cloud'
+    ? (state.apiKey ? '☁ Replicate ✓' : '⚙ Configurar API')
+    : '🖥 Local';
+}
+
+// ── File handling ─────────────────────────────────────────────────────
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+});
+
+function fmtSize(b) {
+  return b < 1048576 ? (b/1024).toFixed(0)+' KB' : (b/1048576).toFixed(1)+' MB';
+}
+
+async function handleFile(file) {
+  state.file = file;
+  state.jobId = null;
+  state.stemUrls = {};
+  hideError();
+  stemsArea.classList.remove('visible');
+  bottomActs.classList.remove('visible');
+  progArea.classList.remove('visible');
+
+  fpName.textContent = file.name;
+  fpMeta.textContent = `${fmtSize(file.size)} · ${file.type || 'audio'}`;
+  filePreview.classList.add('visible');
+
+  await drawWaveform(file);
+  checkSeparateReady();
+}
+
+function clearFile() {
+  state.file = null;
+  fileInput.value = '';
+  filePreview.classList.remove('visible');
+  btnSep.classList.remove('visible');
+  btnSep.disabled = true;
+  hideError();
+}
+
+function checkSeparateReady() {
+  const configured = state.mode === 'cloud' ? !!state.apiKey : !!state.localUrl;
+  const ready = !!state.file && configured;
+  btnSep.classList.toggle('visible', !!state.file);
+  btnSep.disabled = !ready;
+  if (state.file && !configured) {
+    $('btn-sep-text').textContent = '⚙ Configura la API primero';
+  } else {
+    $('btn-sep-text').textContent = '⚡ Separar pistas';
+  }
+}
+
+// ── Waveform ──────────────────────────────────────────────────────────
+async function drawWaveform(file) {
+  const canvas = waveCanvas;
+  const dpr  = window.devicePixelRatio || 1;
+  const W    = canvas.offsetWidth || 320;
+  const H    = 64;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.fillStyle = '#0a0a0f';
+  ctx.fillRect(0, 0, W, H);
+
+  try {
+    const ab = await file.arrayBuffer();
+    const ac = new AudioContext();
+    state.audioBuffer = await ac.decodeAudioData(ab);
+    const data = state.audioBuffer.getChannelData(0);
+    const step = Math.max(1, Math.floor(data.length / W));
+    const mid  = H / 2;
+
+    ctx.strokeStyle = '#06d6a0';
+    ctx.lineWidth   = 1;
+    ctx.globalAlpha = .7;
+    ctx.beginPath();
+
+    for (let x = 0; x < W; x++) {
+      let max = 0;
+      for (let i = 0; i < step; i++) {
+        const v = Math.abs(data[x*step+i] || 0);
+        if (v > max) max = v;
+      }
+      const y = max * mid * .9;
+      ctx.moveTo(x, mid - y);
+      ctx.lineTo(x, mid + y);
+    }
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ac.close();
+  } catch {
+    // Fallback: random bars
+    ctx.fillStyle = 'rgba(6,214,160,.2)';
+    for (let x = 0; x < W; x += 3) {
+      const h = Math.random() * 48 + 4;
+      ctx.fillRect(x, (H-h)/2, 2, h);
+    }
+  }
+}
+
+// ── Separation ────────────────────────────────────────────────────────
+btnSep.addEventListener('click', separate);
+
+async function separate() {
+  if (!state.file) return;
+  btnSep.disabled = true;
+  hideError();
+  progArea.classList.add('visible');
+  progFill.classList.add('indeterminate');
+  progFill.style.width = '0%';
+  progPct.textContent = '—';
+  stemsArea.classList.remove('visible');
+  bottomActs.classList.remove('visible');
+
+  try {
+    if (state.mode === 'cloud') {
+      await separateCloud();
+    } else {
+      await separateLocal();
+    }
+  } catch (err) {
+    showError(err.message);
+    progArea.classList.remove('visible');
+    btnSep.disabled = false;
+  }
+}
+
+// ── Cloud via Replicate ───────────────────────────────────────────────
+async function separateCloud() {
+  setProgStep('Subiendo audio…');
+
+  // Convert file to base64 data URI for Replicate
+  const b64 = await toBase64DataUri(state.file);
+
+  setProgStep('Creando predicción en Replicate…');
+
+  // Use the official demucs model on Replicate
+  const createResp = await fetch('https://api.replicate.com/v1/predictions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Token ${state.apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      version: 'b4ce7bf6f46d7add82f84db32a4c0f01513d04e3ea14efd7c8b6f0df2b39e7b2',
+      input: {
+        audio: b64,
+        model: 'htdemucs',
+        stem: 'none',
+        mp3: true,
+        mp3_bitrate: 320,
+      }
+    })
+  });
+
+  if (!createResp.ok) {
+    const e = await createResp.json();
+    throw new Error(`Replicate error: ${e.detail || JSON.stringify(e)}`);
+  }
+
+  const prediction = await createResp.json();
+  state.jobId = prediction.id;
+
+  setProgStep(`Procesando con htdemucs… (ID: ${prediction.id.slice(0,8)})`);
+
+  // Poll for completion
+  await pollReplicate(prediction.id);
+}
+
+async function pollReplicate(predId) {
+  const maxWait = 600000; // 10 min
+  const start   = Date.now();
+
+  while (Date.now() - start < maxWait) {
+    await sleep(4000);
+
+    const r = await fetch(`https://api.replicate.com/v1/predictions/${predId}`, {
+      headers: { 'Authorization': `Token ${state.apiKey}` }
+    });
+    const data = await r.json();
+
+    if (data.status === 'succeeded') {
+      setProgStep('¡Separación completa!');
+      progFill.classList.remove('indeterminate');
+      progFill.style.width = '100%';
+      progPct.textContent = '100%';
+
+      // Replicate demucs returns output as object with stem URLs
+      const out = data.output;
+      // Output can be { drums, bass, vocals, other } or array
+      let urls = {};
+      if (Array.isArray(out)) {
+        // Some versions return an array of URLs ordered as drums,bass,vocals,other
+        const names = ['drums','bass','vocals','other'];
+        out.forEach((url, i) => { if (names[i]) urls[names[i]] = url; });
+      } else if (out && typeof out === 'object') {
+        urls = out;
+      }
+
+      state.stemUrls = urls;
+      renderStems();
+      return;
+    }
+
+    if (data.status === 'failed' || data.status === 'canceled') {
+      throw new Error(`Replicate: ${data.error || data.status}`);
+    }
+
+    // Estimate progress from logs if available
+    const logs = data.logs || '';
+    const match = logs.match(/(\d+)%/g);
+    if (match) {
+      const last = parseInt(match[match.length-1]);
+      progFill.classList.remove('indeterminate');
+      progFill.style.width = last + '%';
+      progPct.textContent  = last + '%';
+    }
+    setProgStep(`Estado: ${data.status}…`);
+  }
+
+  throw new Error('Tiempo de espera agotado (10 min). Intenta con un archivo más corto.');
+}
+
+// ── Local server ──────────────────────────────────────────────────────
+async function separateLocal() {
+  setProgStep('Conectando al servidor local…');
+
+  const fd = new FormData();
+  fd.append('audio', state.file);
+
+  setProgStep('Enviando audio al servidor local…');
+
+  const res  = await fetch(`${state.localUrl}/separate`, { method: 'POST', body: fd });
+  const data = await res.json();
+
+  if (!res.ok) throw new Error(data.error || 'Error del servidor local');
+
+  state.jobId = data.job_id;
+
+  progFill.classList.remove('indeterminate');
+  progFill.style.width = '100%';
+  progPct.textContent  = '100%';
+  setProgStep('¡Separación completa!');
+
+  // Build local download URLs
+  STEMS.forEach(s => {
+    state.stemUrls[s.id] = `${state.localUrl}/download/${state.jobId}/${s.id}`;
+  });
+
+  renderStems();
+}
+
+// ── Render stem cards ─────────────────────────────────────────────────
+function renderStems() {
+  stemsGrid.innerHTML = '';
+
+  STEMS.forEach(stem => {
+    const card = document.createElement('div');
+    card.className = 'stem-card';
+    card.dataset.stem = stem.id;
+
+    card.innerHTML = `
+      <div class="stem-row1">
+        <div class="stem-icon-wrap" style="background:${stem.bg}">
+          <span>${stem.icon}</span>
+        </div>
+        <div class="stem-label">
+          <div class="stem-name" style="color:${stem.color}">${stem.label}</div>
+          <div class="stem-desc">${stem.desc}</div>
+        </div>
+        <button
+          class="stem-dl-btn"
+          style="border-color:${stem.color};color:${stem.color}"
+          id="dl-${stem.id}"
+          onclick="downloadStem('${stem.id}')"
+          ${state.stemUrls[stem.id] ? '' : 'disabled'}
+        >
+          ⬇ WAV
+        </button>
+      </div>
+      <div class="gain-row">
+        <span class="gain-label">🔇</span>
+        <input
+          type="range"
+          class="gain-slider"
+          id="gain-${stem.id}"
+          min="-30" max="10" step="1" value="0"
+          style="accent-color:${stem.color}"
+          oninput="updateGain('${stem.id}', this.value)"
+        >
+        <span class="gain-val" id="gainval-${stem.id}">0 dB</span>
+        <span class="gain-label">🔊</span>
+      </div>
+    `;
+
+    stemsGrid.appendChild(card);
+  });
+
+  stemsArea.classList.add('visible');
+  bottomActs.classList.add('visible');
+
+  setTimeout(() => {
+    stemsArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 300);
+}
+
+function updateGain(stemId, val) {
+  state.gains[stemId] = parseInt(val);
+  $(`gainval-${stemId}`).textContent = (val >= 0 ? '+' : '') + val + ' dB';
+}
+
+// ── Download ──────────────────────────────────────────────────────────
+async function downloadStem(stemId) {
+  const url = state.stemUrls[stemId];
+  if (!url) { toast('URL no disponible para ' + stemId); return; }
+
+  const btn = $(`dl-${stemId}`);
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = '⏳';
+
+  try {
+    const ext  = url.includes('.mp3') ? 'mp3' : 'wav';
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = `${stemId}.${ext}`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+
+    btn.innerHTML = '✓ Listo';
+    btn.classList.add('done');
+    toast(`✓ ${stemId} descargado`);
+    setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; btn.classList.remove('done'); }, 3000);
+  } catch (err) {
+    showError(`No se pudo descargar ${stemId}: ${err.message}`);
+    btn.innerHTML = orig;
+    btn.disabled  = false;
+  }
+}
+
+$('btn-dl-all').addEventListener('click', async () => {
+  for (const stem of STEMS) {
+    if (state.stemUrls[stem.id]) {
+      await downloadStem(stem.id);
+      await sleep(600);
+    }
+  }
+});
+
+// ── Reset ─────────────────────────────────────────────────────────────
+function resetAll() {
+  if (state.jobId && state.mode === 'local') {
+    fetch(`${state.localUrl}/cleanup/${state.jobId}`, { method: 'DELETE' }).catch(() => {});
+  }
+  state.file = null; state.jobId = null; state.stemUrls = {};
+  state.gains = { drums:0, bass:0, vocals:0, other:0 };
+  fileInput.value = '';
+  filePreview.classList.remove('visible');
+  btnSep.classList.remove('visible');
+  btnSep.disabled = true;
+  progArea.classList.remove('visible');
+  stemsArea.classList.remove('visible');
+  bottomActs.classList.remove('visible');
+  hideError();
+  stemsGrid.innerHTML = '';
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function toBase64DataUri(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload  = () => res(r.result);
+    r.onerror = () => rej(new Error('No se pudo leer el archivo'));
+    r.readAsDataURL(file);
+  });
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function setProgStep(msg) { progStep.textContent = msg; }
+
+function showError(msg) {
+  errorMsg.innerHTML = '⚠ ' + msg;
+  errorMsg.classList.add('visible');
+}
+function hideError() {
+  errorMsg.classList.remove('visible');
+  errorMsg.textContent = '';
+}
+
+let toastTimer;
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
